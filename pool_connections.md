@@ -89,6 +89,7 @@ Celery utiliza el parámetro `concurrency` (o `-c`) para definir el tamaño de s
   - El **Concurrency** (`-c N`) es el número de **ejecutores simultáneos** que ese *Worker* genera internamente
 
 **Ejemplo de comando:**
+
 ```bash
 # Lanza 1 Worker con 10 ejecutores concurrentes
 celery -A myapp worker -c 10
@@ -112,7 +113,7 @@ Este Pool define el **número máximo** de conexiones que el sistema puede tener
 | Escenario | Consecuencia | Analogía de las Tuberías |
 | :--- | :--- | :--- |
 | **Pool Celery > Pool DB** | **Bloqueo/Timeouts.** Los ejecutores de Celery se ponen en cola esperando una conexión DB. Si esperan demasiado, la tarea falla por *timeout*. | Tienes muchos grifos abiertos (Ejecutores Celery), pero la tubería principal (Pool DB) solo puede suministrar agua a una fracción. Los procesos se detienen. |
-| **Pool Celery < Pool DB** | Recursos Subutilizados. Tienes capacidad ociosa en la DB que Celery no puede aprovechar. Es menos eficiente, pero seguro.	 | La tubería es ancha, pero solo tienes 2 grifos. Desperdicias la capacidad de la tubería. |
+| **Pool Celery < Pool DB** | Recursos Subutilizados. Tienes capacidad ociosa en la DB que Celery no puede aprovechar. Es menos eficiente, pero seguro. | La tubería es ancha, pero solo tienes 2 grifos. Desperdicias la capacidad de la tubería. |
 | **Pool Celery = Pool DB** | **Balance Ideal.** Cada ejecutor tiene una conexión garantizada. Máximo rendimiento sin bloqueos por espera de conexión. | El número de grifos coincide con la capacidad de la tubería. |
 
 ### 4. La Regla de Oro para el Balance
