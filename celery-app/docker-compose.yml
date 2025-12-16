@@ -1,0 +1,170 @@
+services:
+  # ==================== DATA LAYER ====================
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: celery_user
+      POSTGRES_PASSWORD: celery_pass
+      POSTGRES_DB: celery_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U celery_user -d celery_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== APPLICATION ====================
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: app
+    ports:
+      - "8000:8000"
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DATABASE_URL: postgresql://celery_user:celery_pass@postgres:5432/celery_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ==================== CELERY WORKERS ====================
+  # Worker 1: Default queue (tareas rápidas)
+  celery_worker_default:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: celery_worker_default
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DATABASE_URL: postgresql://celery_user:celery_pass@postgres:5432/celery_db
+      WORKER_NAME: default
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.celery_app worker --loglevel=info --queues=default -n default@%h
+
+  # Worker 2: Heavy queue (tareas lentas/CPU-bound)
+  celery_worker_heavy:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: celery_worker_heavy
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DATABASE_URL: postgresql://celery_user:celery_pass@postgres:5432/celery_db
+      WORKER_NAME: heavy
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.celery_app worker --loglevel=info --queues=heavy -n heavy@%h
+
+  # ==================== MONITORING ====================
+  
+  # Telegraf: Exporta métricas de contenedores Docker a Prometheus
+  # NOTA PARA FEDORA/SELINUX: Antes de ejecutar, hacer:
+  # sudo chmod 666 /var/run/docker.sock
+  # O exportar DOCKER_GID=$(getent group docker | cut -d: -f3) y usar docker-compose
+  telegraf:
+    image: telegraf:latest
+    container_name: telegraf
+    user: "0:${DOCKER_GID:-999}"     # User root con GID del grupo docker
+    privileged: true                 # Necesario para acceder a métricas del sistema
+    security_opt:
+      - label:disable                # Deshabilita SELinux labels para este contenedor
+    environment:
+      - HOST_PROC=/rootfs/proc
+      - HOST_SYS=/rootfs/sys
+      - HOST_ETC=/rootfs/etc
+    volumes:
+      - ./monitoring/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/rootfs/sys:ro
+      - /proc:/rootfs/proc:ro
+      - /etc:/rootfs/etc:ro
+    ports:
+      - "9273:9273"
+    restart: always
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    depends_on:
+      - telegraf
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_DISABLE_INITIAL_ADMIN_PASSWORD_CHANGE: "true"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+
+  # ==================== UTILITIES ====================
+  flower:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: flower
+    ports:
+      - "5555:5555"
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      FLOWER_UNAUTHENTICATED_API: "true"
+    depends_on:
+      - redis
+    command: celery -A app.celery_app flower --port=5555
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  default:
+    name: celery_network
